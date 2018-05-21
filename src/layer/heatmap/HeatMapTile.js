@@ -74,7 +74,10 @@ define([], function(){
             var location = this._data[i];
             // Get the location in pixels and draw the image.
             ctx.globalAlpha = location.measure * this._incrementPerIntensity;
-            ctx.drawImage(shape, this.longitudeInSector(location, this._sector, this._width), this._height - this.latitudeInSector(location, this._sector, this._height));
+            ctx.drawImage(shape,
+                this.longitudeInSector(location, this._sector, this._width),
+                this._height - this.latitudeInSector(location, this._sector, this._height)
+            );
         }
 
         return this._canvas;
@@ -133,7 +136,7 @@ define([], function(){
         // Percentage of the available space.
         var sizeOfArea = sector.maxLatitude - sector.minLatitude;
         var locationInArea = location.latitude - sector.minLatitude;
-        return Math.ceil((locationInArea / sizeOfArea) * (height - 1));
+        return Math.ceil((locationInArea / sizeOfArea) * (height));
     };
 
     /**
@@ -145,7 +148,7 @@ define([], function(){
     HeatMapTile.prototype.longitudeInSector = function(location, sector, width) {
         var sizeOfArea = sector.maxLongitude - sector.minLongitude ;
         var locationInArea = location.longitude - sector.minLongitude;
-        return Math.ceil((locationInArea / sizeOfArea) * (width - 1));
+        return Math.ceil((locationInArea / sizeOfArea) * (width));
     };
 
     return HeatMapTile;

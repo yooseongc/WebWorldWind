@@ -1,6 +1,22 @@
+/*
+ * Copyright 2015-2018 WorldWind Contributors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 define([
     '../../error/ArgumentError',
     './ColoredTile',
+    './GeographicalFilter',
     './HeatMapTile',
     '../../util/ImageSource',
     './IntervalType',
@@ -12,6 +28,7 @@ define([
     '../../util/WWUtil'
 ], function (ArgumentError,
              ColoredTile,
+             GeographicalFilter,
              HeatMapTile,
              ImageSource,
              IntervalType,
@@ -31,35 +48,28 @@ define([
      * @augments TiledImageLayer
      * @alias HeatMapLayer
      * @param displayName {String} The display name to associate with this layer.
-     * @param measuredLocations {MeasuredLocation[]} Array of the points with the measured locations provided. .
+     * @param measuredLocations {MeasuredLocation[]} Array of the points with the measured locations provided.
+     * @param usedDataStructure {String} Enumeration. If there is none provided, the default is Object based. The possible
+     *  options are: ARRAY, GRID
+     *  The ARRAY structure is more effective if you have less than around 50 000 points and if you work with bigger areas
+     *  most of the time.
+     *  The GRID structure is more effective in smaller areas and/or if there is more than 50 000 point. At around 100 000
+     *  points the gain for smaller areas is up to 30% and around 10% for large areas.
+     *  The previous results were obtained by generating randomly distributed 10 000, 100 000, 500 000 and 1 000 000 points
+     *  across the whole globe. The first test was focused on initial load of the globe in distance big enough for the whole
+     *  globe to be displayed. The second test was focused on loading of the HeatMap Tiles in the distance of 4 000 km
+     *  meaning that the size of tile is quarter of the maximum sized tiles.
      */
-    var HeatMapLayer = function (displayName, measuredLocations) {
+    var HeatMapLayer = function (displayName, measuredLocations, usedDataStructure) {
         this.tileWidth = 512;
         this.tileHeight = 512;
 
         TiledImageLayer.call(this, new Sector(-90, 90, -180, 180), new Location(45, 45), 14, 'image/png', 'HeatMap' + WWUtil.guid(), this.tileWidth, this.tileHeight);
 
         this.displayName = displayName;
+        usedDataStructure = usedDataStructure || "GRID";
 
-        var data = {};
-        var lat, lon;
-        for (lat = -90; lat < 90; lat++) {
-            data[lat] = {};
-            for (lon = -180; lon < 180; lon++) {
-                data[lat][lon] = [];
-            }
-        }
-
-        var latitude, longitude;
-        measuredLocations.forEach(function (measured) {
-            latitude = Math.floor(measured.latitude);
-            longitude = Math.floor(measured.longitude);
-            data[latitude][longitude].push(measured);
-        });
-        this._data = data;
-        // Use other structure than filtering for the geographical data? Each of the tiles receive a value.
-        // Object representing the lat and lon?
-
+        this._filter = new GeographicalFilter(measuredLocations, usedDataStructure);
         this._intervalType = IntervalType.CONTINUOUS;
         this._scale = ['blue', 'cyan', 'lime', 'yellow', 'red'];
         this._radius = 25;
@@ -164,95 +174,6 @@ define([
     });
 
     /**
-     * It gets the relevant points for the visualisation for current sector. At the moment it uses QuadTree to retrieve
-     * the information.
-     * @private
-     * @param data
-     * @param sector
-     * @returns {Object[]}
-     */
-    HeatMapLayer.prototype.filterGeographically = function (data, sector) {
-        var minLatitude = Math.floor(sector.minLatitude);
-        var maxLatitude = Math.floor(sector.maxLatitude);
-        var minLongitude = Math.floor(sector.minLongitude);
-        var maxLongitude = Math.floor(sector.maxLongitude);
-
-        var extraLongitudeBefore = 0, extraLongitudeAfter = 0;
-
-        if (minLatitude < -90) {
-            minLatitude = -90;
-        }
-        if (maxLatitude > 89) {
-            maxLatitude = 89;
-        }
-
-        if (minLongitude < -180) {
-            extraLongitudeBefore = Math.abs(minLongitude - (-180));
-            minLongitude = -180;
-        }
-        if (maxLongitude > 179) {
-            extraLongitudeAfter = Math.abs(maxLongitude - 180);
-            maxLongitude = 179;
-        }
-
-        var result = [];
-        var lat, lon;
-        this.gatherGeographical(data, result, sector, minLatitude, maxLatitude, minLongitude, maxLongitude);
-
-        if (extraLongitudeBefore !== 0) {
-            var beforeSector = new Sector(minLatitude, maxLatitude, 179 - extraLongitudeBefore, 179);
-            for (lat = minLatitude; lat <= maxLatitude; lat++) {
-                for (lon = 179 - extraLongitudeBefore; lon <= 179; lon++) {
-                    data[lat][lon].forEach(function (element) {
-                        if (beforeSector.containsLocation(element.latitude, element.longitude)) {
-                            result.push(new MeasuredLocation(element.latitude, -360 + element.longitude, element.measure));
-                        }
-                    });
-                }
-            }
-        }
-        if (extraLongitudeAfter !== 0) {
-            var afterSector = new Sector(minLatitude, maxLatitude, -180, -180 + extraLongitudeAfter);
-
-            for (lat = minLatitude; lat <= maxLatitude; lat++) {
-                for (lon = -180; lon <= -180 + extraLongitudeAfter; lon++) {
-                    data[lat][lon].forEach(function (element) {
-                        if (afterSector.containsLocation(element.latitude, element.longitude)) {
-                            result.push(new MeasuredLocation(element.latitude, 360 + element.longitude, element.measure));
-                        }
-                    });
-                }
-            }
-        }
-
-        return result;
-    };
-
-    /**
-     * Internal method to gather the geographical data for given sector and boundingBox.
-     * @private
-     * @param data
-     * @param result
-     * @param sector
-     * @param minLatitude
-     * @param maxLatitude
-     * @param minLongitude
-     * @param maxLongitude
-     */
-    HeatMapLayer.prototype.gatherGeographical = function (data, result, sector, minLatitude, maxLatitude, minLongitude, maxLongitude) {
-        var lat, lon;
-        for (lat = minLatitude; lat <= maxLatitude; lat++) {
-            for (lon = minLongitude; lon <= maxLongitude; lon++) {
-                data[lat][lon].forEach(function (element) {
-                    if (sector.containsLocation(element.latitude, element.longitude)) {
-                        result.push(element);
-                    }
-                });
-            }
-        }
-    };
-
-    /**
      * It sets gradient based on the Scale and IntervalType.
      */
     HeatMapLayer.prototype.setGradient = function (data) {
@@ -279,7 +200,7 @@ define([
             if (data.length >= scale.length) {
                 scale.forEach(function (color, index) {
                     // What is the fraction of the colors
-                    var fractionDecidingTheScale = index / scale.length; // Kolik je na nte pozice z maxima.
+                    var fractionDecidingTheScale = index / scale.length;
                     var pointInScale = data[Math.floor(fractionDecidingTheScale * data.length)].intensity / max;
                     gradient[pointInScale] = color;
                 });
@@ -310,7 +231,7 @@ define([
             var extendedWidth = Math.ceil(extended.extensionFactor * this.tileWidth);
             var extendedHeight = Math.ceil(extended.extensionFactor * this.tileHeight);
 
-            var data = this.filterGeographically(this._data, extended.sector);
+            var data = this._filter.filter(extended.sector);
 
             var canvas = this.createHeatMapTile(data, {
                 sector: extended.sector,
@@ -327,9 +248,8 @@ define([
             var result = document.createElement('canvas');
             result.height = this.tileHeight;
             result.width = this.tileWidth;
-            result.getContext('2d').putImageData(canvas.getContext('2d').getImageData(
-                extendedWidth, extendedHeight, this.tileWidth, this.tileHeight), 0, 0
-            );
+            var dataToDraw = canvas.getContext('2d').getImageData(extendedWidth, extendedHeight, this.tileWidth, this.tileHeight);
+            result.getContext('2d').putImageData(dataToDraw, 0, 0);
 
             var texture = layer.createTexture(dc, tile, result);
             layer.removeFromCurrentRetrievals(imagePath);
@@ -369,6 +289,9 @@ define([
     /**
      * This method calculates the new sector for which the data will be filtered and which will be drawn on the tile.
      * The standard version just applies extension factor to the difference between minimum and maximum.
+     * This is useful to overwrite if you have specifically structured data and you know that for certain levels of detail,
+     * you won't need the bigger extension or knows that for certain areas and level of detail you will need the
+     * bigger extension area.
      * @protected
      * @param sector {Sector} Sector to use as basis for the extension.
      * @return {Object} .sector New extended sector.
